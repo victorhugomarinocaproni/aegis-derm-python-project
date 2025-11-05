@@ -4,8 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.utils import resample
-from sklearn.metrics import (classification_report, confusion_matrix,
-                             recall_score, precision_score, f1_score, roc_curve, auc)
+from sklearn.metrics import (classification_report, confusion_matrix, roc_curve, auc)
 import seaborn as sns
 
 import tensorflow as tf
@@ -16,22 +15,10 @@ from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCh
 from tensorflow.keras.optimizers import Adam
 
 from tensorflow.keras.applications.resnet50 import ResNet50
-from tensorflow.keras.applications.resnet50 import preprocess_input, decode_predictions
+from tensorflow.keras.applications.resnet50 import preprocess_input
 from tensorflow.keras.preprocessing import image
 
-
 print(f"TensorFlow version: {tf.__version__}")
-print(f"GPU disponível: {tf.config.list_physical_devices('GPU')}")
-
-# Configurar GPU para usar memória dinâmica
-gpus = tf.config.list_physical_devices('GPU')
-if gpus:
-    try:
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        print("✅ GPU configurada para crescimento dinâmico de memória")
-    except RuntimeError as e:
-        print(f"⚠️  Erro ao configurar GPU: {e}")
 
 # ========================
 # CONFIGURAÇÕES
@@ -39,7 +26,7 @@ if gpus:
 CSV_PATH = os.path.join("assets", "metadata", "metadata.csv")
 IMAGES_DIR = os.path.join("assets", "images")
 IMG_SIZE = (224, 224)
-BATCH_SIZE = 32  # Aumentado para usar melhor a GPU
+BATCH_SIZE = 32
 EPOCHS = 50
 FINE_TUNE_AT = 30
 
@@ -134,13 +121,16 @@ print(f"  - Malignant: {(val_df['label'] == 'malignant').sum()}")
 # ========================
 # 4. DATA AUGMENTATION MODERADO
 # ========================
-# Augmentation REDUZIDO para evitar overfitting em dados oversampled
+
+# Como nosso dataset é desbalanceado, nós duplicamos 50% das imangens malignas do dataset
+# para balancear melhor as classes. Portanto, precisamos aplicar data augmentation moderado
+# para evitar overfitting nas imagens duplicadas.
 train_datagen = ImageDataGenerator(
     rescale=1. / 255,
-    rotation_range=15,  # Reduzido de 20
-    width_shift_range=0.1,  # Reduzido de 0.2
+    rotation_range=15,
+    width_shift_range=0.1,
     height_shift_range=0.1,
-    zoom_range=0.1,  # Reduzido de 0.2
+    zoom_range=0.1,
     horizontal_flip=True,
     fill_mode='nearest'
 )
