@@ -37,7 +37,6 @@ class LoggerConfig:
         logger = logging.getLogger(name)
         logger.setLevel(level)
 
-        # Evita duplicação de handlers
         if logger.handlers:
             return logger
 
@@ -46,12 +45,10 @@ class LoggerConfig:
             datefmt='%Y-%m-%d %H:%M:%S'
         )
 
-        # Console handler
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
 
-        # File handler (se especificado)
         if log_file:
             os.makedirs(os.path.dirname(log_file), exist_ok=True)
             file_handler = logging.FileHandler(log_file)
@@ -68,32 +65,26 @@ class LoggerConfig:
 class Config:
     """Classe de configuração centralizada."""
 
-    # Paths
     CSV_PATH = os.path.join("assets", "metadata", "metadata.csv")
     IMAGES_DIR = os.path.join("assets", "images")
     MODELS_DIR = "models"
     RESULTS_DIR = "results"
     LOGS_DIR = "logs"
 
-    # Hiperparâmetros de imagem
     IMG_SIZE = (224, 224)
     BATCH_SIZE = 32
 
-    # Treinamento
     EPOCHS = 50
     FINE_TUNE_AT = 30
     FINE_TUNE_LAYERS = 30
 
-    # Cross-Validation
     N_FOLDS = 5
 
-    # Keras Tuner
     MAX_TRIALS = 20
     EXECUTIONS_PER_TRIAL = 2
     TUNER_DIR = "keras_tuner"
     TUNER_PROJECT_NAME = "skin_cancer_resnet50"
 
-    # Seeds para reprodutibilidade
     RANDOM_SEED = 42
 
     @classmethod
@@ -195,7 +186,7 @@ class DataManager:
         """Cria os geradores de dados com data augmentation."""
 
         train_datagen = ImageDataGenerator(
-            rescale=1. / 255,
+            rescale=1./255,
             rotation_range=15,
             width_shift_range=0.1,
             height_shift_range=0.1,
@@ -204,7 +195,7 @@ class DataManager:
             fill_mode='nearest'
         )
 
-        val_datagen = ImageDataGenerator(rescale=1. / 255)
+        val_datagen = ImageDataGenerator(rescale=1./255)
 
         train_gen = train_datagen.flow_from_dataframe(
             train_df,
@@ -212,9 +203,9 @@ class DataManager:
             y_col='label',
             target_size=self.config.IMG_SIZE,
             batch_size=self.config.BATCH_SIZE,
-            class_mode='categorical',
-            classes=['benign', 'malignant'],
-            shuffle=True,
+            class_mode='binary',
+            classes=['benign', 'malignant'], # --> Convenção: a classe 1 (em classificações binárias) é sempre a classe de interesse
+            shuffle=True,                    # e será vista como "POSITIVE" na matriz de confusão e métricas derivadas.g
             seed=self.config.RANDOM_SEED
         )
 
@@ -224,9 +215,9 @@ class DataManager:
             y_col='label',
             target_size=self.config.IMG_SIZE,
             batch_size=self.config.BATCH_SIZE,
-            class_mode='categorical',
-            classes=['benign', 'malignant'],
-            shuffle=False,
+            class_mode='binary',
+            classes=['benign', 'malignant'], # --> Convenção: a classe 1 (em classificações binárias) é sempre a classe de interesse
+            shuffle=False,                   # e será vista como "POSITIVE" na matriz de confusão e métricas derivadas.
             seed=self.config.RANDOM_SEED
         )
 
@@ -276,13 +267,13 @@ class ModelBuilder:
             kernel_regularizer=regularizers.l2(l2_reg)
         )(x)
         x = layers.Dropout(dropout_rate * 0.7)(x)
-        outputs = layers.Dense(2, activation='softmax')(x)
+        outputs = layers.Dense(1, activation='sigmoid')(x)
 
         model = keras.Model(inputs, outputs)
 
         model.compile(
             optimizer=Adam(learning_rate=learning_rate),
-            loss='categorical_crossentropy',
+            loss='binary_crossentropy',
             metrics=[
                 'accuracy',
                 keras.metrics.AUC(name='auc'),
@@ -359,13 +350,13 @@ class ResNet50HyperModel(kt.HyperModel):
             kernel_regularizer=regularizers.l2(l2_reg)
         )(x)
         x = layers.Dropout(dropout_rate * 0.7)(x)
-        outputs = layers.Dense(2, activation='softmax')(x)
+        outputs = layers.Dense(1, activation='sigmoid')(x)
 
         model = keras.Model(inputs, outputs)
 
         model.compile(
             optimizer=Adam(learning_rate=learning_rate),
-            loss='categorical_crossentropy',
+            loss='binary_crossentropy',
             metrics=[
                 'accuracy',
                 keras.metrics.AUC(name='auc'),
@@ -389,7 +380,8 @@ class HyperparameterTuner:
             self,
             train_gen: ImageDataGenerator,
             val_gen: ImageDataGenerator,
-            class_weight: Dict[int, float]
+            class_weight: Dict[int, float],
+            search_hyperparameters: bool
     ) -> kt.HyperParameters:
         """Executa a busca de hiperparâmetros."""
 
@@ -401,7 +393,7 @@ class HyperparameterTuner:
 
         tuner = kt.BayesianOptimization(
             hypermodel,
-            objective=kt.Objective('val_auc', direction='max'),
+            objective=kt.Objective('val_auc', direction='max'), # -> talvez mexer nesse objetivo (mudar para recall) ??
             max_trials=self.config.MAX_TRIALS,
             executions_per_trial=self.config.EXECUTIONS_PER_TRIAL,
             directory=self.config.TUNER_DIR,
@@ -417,7 +409,7 @@ class HyperparameterTuner:
 
         callbacks = [
             EarlyStopping(
-                monitor='val_auc',
+                monitor='val_auc', # -> mudar para val_recall ??
                 patience=5,
                 restore_best_weights=True,
                 mode='max'
@@ -430,7 +422,6 @@ class HyperparameterTuner:
             )
         ]
 
-        # Callback customizado para logging
         class TunerLogger(keras.callbacks.Callback):
             def __init__(self, logger, trial_num):
                 super().__init__()
@@ -447,14 +438,15 @@ class HyperparameterTuner:
         self.logger.info("\n Iniciando busca...")
 
         try:
-            tuner.search(
-                train_gen,
-                validation_data=val_gen,
-                epochs=20,  # Menos épocas para tuning
-                callbacks=callbacks,
-                class_weight=class_weight,
-                verbose=1
-            )
+            if search_hyperparameters:
+                tuner.search(
+                    train_gen,
+                    validation_data=val_gen,
+                    epochs=20,
+                    callbacks=callbacks,
+                    class_weight=class_weight,
+                    verbose=1
+                )
 
             self.best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
 
@@ -465,7 +457,6 @@ class HyperparameterTuner:
             self.logger.info(f"  - L2 Regularization: {self.best_hps.get('l2_reg'):.6f}")
             self.logger.info(f"  - Learning Rate: {self.best_hps.get('learning_rate'):.6f}")
 
-            # Salvar melhores hiperparâmetros
             best_hps_dict = {
                 'dropout_rate': float(self.best_hps.get('dropout_rate')),
                 'dense_units': int(self.best_hps.get('dense_units')),
@@ -531,7 +522,6 @@ class CrossValidationManager:
             self.logger.info(f" FOLD {fold}/{self.config.N_FOLDS}")
             self.logger.info("=" * 60)
 
-            # Criar dataframes para este fold
             train_df = df.iloc[train_idx].copy()
             val_df = df.iloc[val_idx].copy()
 
@@ -542,14 +532,11 @@ class CrossValidationManager:
                              f"(Benign: {(val_df['label'] == 'benign').sum()}, "
                              f"Malignant: {(val_df['label'] == 'malignant').sum()})")
 
-            # Criar data managers
             data_manager = DataManager(self.config, self.logger)
             train_gen, val_gen = data_manager.create_data_generators(train_df, val_df)
 
-            # Calcular class weights
             class_weight = model_builder.calculate_class_weights(train_gen)
 
-            # Construir modelo
             if hyperparameters:
                 model, base_model = model_builder.build_model(
                     dropout_rate=hyperparameters['dropout_rate'],
@@ -560,7 +547,6 @@ class CrossValidationManager:
             else:
                 model, base_model = model_builder.build_model()
 
-            # Callbacks
             fold_model_path = os.path.join(
                 self.config.MODELS_DIR,
                 f'fold_{fold}_best_model.keras'
@@ -568,7 +554,7 @@ class CrossValidationManager:
 
             callbacks = [
                 EarlyStopping(
-                    monitor='val_auc',
+                    monitor='val_auc', # --> mudar para val_recall ??
                     patience=15,
                     restore_best_weights=True,
                     mode='max',
@@ -583,7 +569,7 @@ class CrossValidationManager:
                 ),
                 ModelCheckpoint(
                     fold_model_path,
-                    monitor='val_auc',
+                    monitor='val_auc', # --> mudar para val_recall ??
                     mode='max',
                     save_best_only=True,
                     verbose=1
@@ -611,7 +597,7 @@ class CrossValidationManager:
 
                 model.compile(
                     optimizer=Adam(learning_rate=1e-5),
-                    loss='categorical_crossentropy',
+                    loss='binary_crossentropy',
                     metrics=[
                         'accuracy',
                         keras.metrics.AUC(name='auc'),
@@ -624,20 +610,18 @@ class CrossValidationManager:
                     train_gen,
                     validation_data=val_gen,
                     epochs=self.config.EPOCHS,
-                    initial_epoch=len(history1.history['loss']),
+                    initial_epoch=len(history1.history['loss']), # -> usar o loss faz sentido ?
                     callbacks=callbacks,
                     class_weight=class_weight,
                     verbose=1
                 )
 
-            # Avaliar fold
             self.logger.info(f"\n Avaliando Fold {fold}...")
             best_model = keras.models.load_model(fold_model_path)
             y_pred_proba = best_model.predict(val_gen, verbose=0)
             y_pred = np.argmax(y_pred_proba, axis=1)
             y_true = val_gen.classes
 
-            # Calcular métricas
             cm = confusion_matrix(y_true, y_pred)
             tn, fp, fn, tp = cm.ravel()
 
@@ -676,7 +660,6 @@ class CrossValidationManager:
                 'confusion_matrix': cm.tolist()
             })
 
-        # Calcular estatísticas agregadas
         self.logger.info("\n" + "=" * 60)
         self.logger.info(" RESULTADOS AGREGADOS DO CROSS-VALIDATION")
         self.logger.info("=" * 60)
@@ -692,7 +675,6 @@ class CrossValidationManager:
             }
             self.logger.info(f"{metric_name.capitalize():15s}: {mean:.4f} ± {std:.4f}")
 
-        # Salvar resultados
         results_path = os.path.join(self.config.RESULTS_DIR, 'cv_results.json')
         with open(results_path, 'w') as f:
             json.dump({
@@ -783,10 +765,9 @@ class SkinCancerPipeline:
         self.logger.info(f"TensorFlow version: {tf.__version__}")
         self.logger.info(f"Keras Tuner disponível: Sim")
 
-    def run(self, use_tuner: bool = True, use_cv: bool = True):
+    def run(self, use_tuner: bool = True, use_cv: bool = True, search_hyperparameters: bool = True):
         """Executa o pipeline completo."""
 
-        # 1. Carregar e preparar dados
         data_manager = DataManager(self.config, self.logger)
         df = data_manager.load_and_prepare_data()
         df = data_manager.balance_dataset(df)
@@ -798,15 +779,13 @@ class SkinCancerPipeline:
             random_state=self.config.RANDOM_SEED
         )
 
-        # 2. Split inicial para tuning (se necessário)
         if use_tuner:
             train_gen, val_gen = data_manager.create_data_generators(train_df, val_df)
             model_builder = ModelBuilder(self.config, self.logger)
             class_weight = model_builder.calculate_class_weights(train_gen)
 
-            # 3. Busca de hiperparâmetros
             tuner = HyperparameterTuner(self.config, self.logger)
-            best_hps = tuner.search_hyperparameters(train_gen, val_gen, class_weight)
+            best_hps = tuner.search_hyperparameters(train_gen, val_gen, class_weight, search_hyperparameters)
 
             hyperparameters = {
                 'dropout_rate': best_hps.get('dropout_rate'),
@@ -817,7 +796,6 @@ class SkinCancerPipeline:
         else:
             hyperparameters = None
 
-        # 4. Cross-Validation
         if use_cv:
             model_builder = ModelBuilder(self.config, self.logger)
             cv_manager = CrossValidationManager(self.config, self.logger)
@@ -827,7 +805,6 @@ class SkinCancerPipeline:
                 hyperparameters
             )
 
-            # 5. Visualizações
             viz_manager = VisualizationManager(self.config, self.logger)
             viz_manager.plot_cv_results(cv_results)
 
@@ -850,4 +827,9 @@ if __name__ == "__main__":
 
     # Executar com Tuner e Cross-Validation
     # Para desabilitar algum, use: use_tuner=False ou use_cv=False
-    pipeline.run(use_tuner=True, use_cv=True)
+
+    # Para rodar pipeline completa
+    # pipeline.run(use_tuner=True, use_cv=True)
+
+    # Para usar os melhores hiperparâmetros já encontrados
+    pipeline.run(use_tuner=True, use_cv=True, search_hyperparameters=False)
