@@ -187,11 +187,12 @@ class DataManager:
 
         train_datagen = ImageDataGenerator(
             rescale=1./255,
-            rotation_range=15,
-            width_shift_range=0.1,
-            height_shift_range=0.1,
-            zoom_range=0.1,
+            rotation_range=20,
+            width_shift_range=0.15,
+            height_shift_range=0.15,
+            zoom_range=0.15,
             horizontal_flip=True,
+            vertical_flip=True,
             fill_mode='nearest'
         )
 
@@ -288,11 +289,15 @@ class ModelBuilder:
         """Calcula os pesos das classes de forma balanceada."""
         total = train_gen.n
         classes_array = train_gen.classes
-        pos = np.sum(classes_array)
-        neg = total - pos
+        pos = np.sum(classes_array) # Malígno
+        neg = total - pos           # Benigno
 
         weight_for_0 = total / (2.0 * neg)
         weight_for_1 = total / (2.0 * pos)
+
+        # Tentativa de priorizar recall para a classe 1 (maligno), mas sem exagerar
+        recall_factor = 1.2
+        weight_for_1 = weight_for_1 * recall_factor
 
         class_weight = {
             0: weight_for_0,
@@ -393,7 +398,7 @@ class HyperparameterTuner:
 
         tuner = kt.BayesianOptimization(
             hypermodel,
-            objective=kt.Objective('val_auc', direction='max'), # -> talvez mexer nesse objetivo (mudar para recall) ??
+            objective=kt.Objective('val_recall', direction='max'),
             max_trials=self.config.MAX_TRIALS,
             executions_per_trial=self.config.EXECUTIONS_PER_TRIAL,
             directory=self.config.TUNER_DIR,
@@ -409,7 +414,7 @@ class HyperparameterTuner:
 
         callbacks = [
             EarlyStopping(
-                monitor='val_auc', # -> mudar para val_recall ??
+                monitor='val_recall',
                 patience=5,
                 restore_best_weights=True,
                 mode='max'
@@ -504,7 +509,6 @@ class CrossValidationManager:
             random_state=self.config.RANDOM_SEED
         )
 
-        # Preparar arrays para CV
         X = df['image_path'].values
         y = (df['label'] == 'malignant').astype(int).values
 
@@ -554,7 +558,7 @@ class CrossValidationManager:
 
             callbacks = [
                 EarlyStopping(
-                    monitor='val_auc', # --> mudar para val_recall ??
+                    monitor='val_recall',
                     patience=15,
                     restore_best_weights=True,
                     mode='max',
@@ -569,7 +573,7 @@ class CrossValidationManager:
                 ),
                 ModelCheckpoint(
                     fold_model_path,
-                    monitor='val_auc', # --> mudar para val_recall ??
+                    monitor='val_recall',
                     mode='max',
                     save_best_only=True,
                     verbose=1
@@ -829,7 +833,7 @@ if __name__ == "__main__":
     # Para desabilitar algum, use: use_tuner=False ou use_cv=False
 
     # Para rodar pipeline completa
-    # pipeline.run(use_tuner=True, use_cv=True)
+    pipeline.run(use_tuner=True, use_cv=True)
 
     # Para usar os melhores hiperparâmetros já encontrados
-    pipeline.run(use_tuner=True, use_cv=True, search_hyperparameters=False)
+    # pipeline.run(use_tuner=True, use_cv=True, search_hyperparameters=False)
