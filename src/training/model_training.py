@@ -23,6 +23,9 @@ from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
 import keras_tuner as kt
 
+from model_ensemble import ModelEnsembleManager
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
 
 # ============================================================================
 # CONFIGURAÇÃO DE LOGGING
@@ -65,11 +68,11 @@ class LoggerConfig:
 class Config:
     """Classe de configuração centralizada."""
 
-    CSV_PATH = os.path.join("assets", "metadata", "metadata.csv")
-    IMAGES_DIR = os.path.join("assets", "images")
-    MODELS_DIR = "models"
-    RESULTS_DIR = "results"
-    LOGS_DIR = "logs"
+    CSV_PATH = os.path.join("src", "assets", "metadata", "metadata.csv")
+    IMAGES_DIR = os.path.join("src", "assets", "images")
+    MODELS_DIR = os.path.join("src", "models")
+    RESULTS_DIR = os.path.join("src", "results")
+    LOGS_DIR = os.path.join("src", "logs")
 
     IMG_SIZE = (224, 224)
     BATCH_SIZE = 32
@@ -82,7 +85,7 @@ class Config:
 
     MAX_TRIALS = 20
     EXECUTIONS_PER_TRIAL = 2
-    TUNER_DIR = "keras_tuner"
+    TUNER_DIR = os.path.join("src", "keras_tuner")
     TUNER_PROJECT_NAME = "skin_cancer_resnet50"
 
     RANDOM_SEED = 42
@@ -623,7 +626,7 @@ class CrossValidationManager:
             self.logger.info(f"\n Avaliando Fold {fold}...")
             best_model = keras.models.load_model(fold_model_path)
             y_pred_proba = best_model.predict(val_gen, verbose=0)
-            y_pred = np.argmax(y_pred_proba, axis=1)
+            y_pred = (y_pred_proba.ravel() >= 0.5).astype(int)
             y_true = val_gen.classes
 
             cm = confusion_matrix(y_true, y_pred)
@@ -634,7 +637,7 @@ class CrossValidationManager:
             specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
             precision = tp / (tp + fp) if (tp + fp) > 0 else 0
             recall = sensitivity
-            auc_score = roc_auc_score(y_true, y_pred_proba[:, 1])
+            auc_score = roc_auc_score(y_true, y_pred_proba.ravel())
 
             fold_metrics['accuracy'].append(accuracy)
             fold_metrics['auc'].append(auc_score)
@@ -769,7 +772,12 @@ class SkinCancerPipeline:
         self.logger.info(f"TensorFlow version: {tf.__version__}")
         self.logger.info(f"Keras Tuner disponível: Sim")
 
-    def run(self, use_tuner: bool = True, use_cv: bool = True, search_hyperparameters: bool = True):
+    def run(self,
+            use_tuner: bool = True,
+            use_cv: bool = True,
+            search_hyperparameters: bool = True,
+            create_ensemble: bool = True
+            ):
         """Executa o pipeline completo."""
 
         data_manager = DataManager(self.config, self.logger)
@@ -812,6 +820,16 @@ class SkinCancerPipeline:
             viz_manager = VisualizationManager(self.config, self.logger)
             viz_manager.plot_cv_results(cv_results)
 
+        if create_ensemble and use_cv:
+            ensemble_manager = ModelEnsembleManager(self.config, self.logger)
+            ensemble_path = ensemble_manager.create_and_save_ensemble()
+
+            is_valid = ensemble_manager.verify_ensemble_model(ensemble_path)
+            if is_valid:
+                self.logger.info("\nModelo ensemble validado e pronto para uso na API")
+            else:
+                self.logger.warning("\n Problemas detectados no modelo ensemble")
+
         self.logger.info("\n" + "=" * 60)
         self.logger.info(" PIPELINE CONCLUÍDO COM SUCESSO!")
         self.logger.info("=" * 60)
@@ -833,7 +851,9 @@ if __name__ == "__main__":
     # Para desabilitar algum, use: use_tuner=False ou use_cv=False
 
     # Para rodar pipeline completa
-    pipeline.run(use_tuner=True, use_cv=True)
+    # pipeline.run(use_tuner=True, use_cv=True)
 
-    # Para usar os melhores hiperparâmetros já encontrados
-    # pipeline.run(use_tuner=True, use_cv=True, search_hyperparameters=False)
+    # Para usar os melhores hiperparâmetros já encontrados e salvar um modelo final de ensemble (junção dos modelos dos folds)
+    # pipeline.run(use_tuner=True, use_cv=True, search_hyperparameters=False, create_ensemble=True)
+
+    pipeline.run(use_tuner=False, use_cv=False, search_hyperparameters=False, create_ensemble=True)

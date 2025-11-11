@@ -5,3 +5,7 @@ scikit-learn
 tensorflow
 seaborn
 keras-tuner
+pillow
+flask
+flask-cors
+flasgger
