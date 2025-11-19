@@ -122,7 +122,7 @@ class DataManager:
 
         missing = (~df['exists']).sum()
         if missing > 0:
-            self.logger.warning(f"⚠  {missing} imagens não encontradas")
+            self.logger.warning(f"{missing} imagens não encontradas")
             df = df[df['exists']].copy()
 
         self.logger.info(f" Total de imagens válidas: {len(df)}")
@@ -148,7 +148,7 @@ class DataManager:
         df_benign = df[df['label'] == 'benign'].copy()
         df_malignant = df[df['label'] == 'malignant'].copy()
 
-        # Estratégia: Razão 2:1 (benign:malignant)
+        # Estratégia: Razão 2:1.5 (benign:malignant)
         target_benign = min(len(df_benign), int(len(df_malignant) * 2))
         target_malignant = int(len(df_malignant) * 1.5)
 
@@ -209,7 +209,7 @@ class DataManager:
             batch_size=self.config.BATCH_SIZE,
             class_mode='binary',
             classes=['benign', 'malignant'], # --> Convenção: a classe 1 (em classificações binárias) é sempre a classe de interesse
-            shuffle=True,                    # e será vista como "POSITIVE" na matriz de confusão e métricas derivadas.g
+            shuffle=True,                    # e será vista como "POSITIVE" na matriz de confusão e métricas derivadas.
             seed=self.config.RANDOM_SEED
         )
 
@@ -298,10 +298,6 @@ class ModelBuilder:
         weight_for_0 = total / (2.0 * neg)
         weight_for_1 = total / (2.0 * pos)
 
-        # Tentativa de priorizar recall para a classe 1 (maligno), mas sem exagerar
-        recall_factor = 1.2
-        weight_for_1 = weight_for_1 * recall_factor
-
         class_weight = {
             0: weight_for_0,
             1: weight_for_1
@@ -334,7 +330,6 @@ class ResNet50HyperModel(kt.HyperModel):
         l2_reg = hp.Float('l2_reg', min_value=1e-4, max_value=1e-2, sampling='log')
         learning_rate = hp.Float('learning_rate', min_value=1e-5, max_value=1e-2, sampling='log')
 
-        # Construir modelo
         base_model = ResNet50(
             include_top=False,
             weights='imagenet',
@@ -401,7 +396,7 @@ class HyperparameterTuner:
 
         tuner = kt.BayesianOptimization(
             hypermodel,
-            objective=kt.Objective('val_recall', direction='max'),
+            objective=kt.Objective('val_recall', direction='max'),  # Se não funcionar, próxima etapa é voltar aqui para 'val_auc'
             max_trials=self.config.MAX_TRIALS,
             executions_per_trial=self.config.EXECUTIONS_PER_TRIAL,
             directory=self.config.TUNER_DIR,
@@ -413,11 +408,11 @@ class HyperparameterTuner:
         self.logger.info(f"  - Algoritmo: Bayesian Optimization")
         self.logger.info(f"  - Max Trials: {self.config.MAX_TRIALS}")
         self.logger.info(f"  - Executions per Trial: {self.config.EXECUTIONS_PER_TRIAL}")
-        self.logger.info(f"  - Objetivo: Maximizar val_auc")
+        self.logger.info(f"  - Objetivo: Maximizar Recall")
 
         callbacks = [
             EarlyStopping(
-                monitor='val_recall',
+                monitor='val_recall', # Depois tentar mudar para 'val_auc' se não funcionar
                 patience=5,
                 restore_best_weights=True,
                 mode='max'
@@ -561,7 +556,7 @@ class CrossValidationManager:
 
             callbacks = [
                 EarlyStopping(
-                    monitor='val_recall',
+                    monitor='val_recall', # Se não funcionar, mudar para 'val_auc'
                     patience=15,
                     restore_best_weights=True,
                     mode='max',
@@ -576,7 +571,7 @@ class CrossValidationManager:
                 ),
                 ModelCheckpoint(
                     fold_model_path,
-                    monitor='val_recall',
+                    monitor='val_recall', # Se não funcionar, mudar para 'val_auc'
                     mode='max',
                     save_best_only=True,
                     verbose=1
@@ -617,7 +612,7 @@ class CrossValidationManager:
                     train_gen,
                     validation_data=val_gen,
                     epochs=self.config.EPOCHS,
-                    initial_epoch=len(history1.history['loss']), # -> usar o loss faz sentido ?
+                    initial_epoch=len(history1.history['loss']),
                     callbacks=callbacks,
                     class_weight=class_weight,
                     verbose=1
@@ -851,9 +846,9 @@ if __name__ == "__main__":
     # Para desabilitar algum, use: use_tuner=False ou use_cv=False
 
     # Para rodar pipeline completa
-    # pipeline.run(use_tuner=True, use_cv=True)
+    pipeline.run(use_tuner=True, use_cv=True)
 
     # Para usar os melhores hiperparâmetros já encontrados e salvar um modelo final de ensemble (junção dos modelos dos folds)
     # pipeline.run(use_tuner=True, use_cv=True, search_hyperparameters=False, create_ensemble=True)
 
-    pipeline.run(use_tuner=False, use_cv=False, search_hyperparameters=False, create_ensemble=True)
+    # pipeline.run(use_tuner=False, use_cv=False, search_hyperparameters=False, create_ensemble=True)
